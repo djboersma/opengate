@@ -21,253 +21,181 @@ def calculate_mean_unc(edep_arr, unc_arr, edep_thresh_rel=0.7):
     return unc_mean
 
 
+class sim_tps_dose:
+    def __init__(self,flat:bool=False,nSim=40000):
+        paths = utility.get_default_test_paths(
+            __file__, "gate_test044_pbs", output_folder="test059"
+        )
+        output_path = paths.output
+        ref_path = paths.output_ref
+        label="flat" if flat else "weighted"
+        d0name=f"{label}_edep0"
+        d1name=f"{label}_edep1"
+
+        # create the simulation
+        sim = gate.Simulation()
+
+        # main options
+        sim.g4_verbose = False
+        sim.g4_verbose_level = 1
+        sim.visu = False
+        sim.random_seed = 123654789
+        sim.random_engine = "MersenneTwister"
+        sim.number_of_threads = 1
+        sim.output_dir = output_path
+
+        # units
+        km = gate.g4_units.km
+        cm = gate.g4_units.cm
+        mm = gate.g4_units.mm
+        um = gate.g4_units.um
+        MeV = gate.g4_units.MeV
+        Bq = gate.g4_units.Bq
+        nm = gate.g4_units.nm
+        deg = gate.g4_units.deg
+        mrad = gate.g4_units.mrad
+        s = gate.g4_units.s
+
+        # add a material database
+        sim.volume_manager.add_material_database(paths.data / "GateMaterials.db")
+
+        #  change world size
+        world = sim.world
+        world.size = [600 * cm, 500 * cm, 500 * cm]
+
+        ## FIRST DETECTOR ##
+        # box
+        # translation and rotation like in the Gate macro
+        box = sim.add_volume("Box", "box")
+        box.size = [200 * mm, 200 * mm, 1050 * mm]
+        # box.translation = [0 * cm, 0 * cm, 52.5 * cm]
+        # box.rotation = Rotation.from_euler('y',-90,degrees=True).as_matrix()
+        box.translation = [0 * cm, 0 * cm, 52.5 * cm]
+        box.material = "Vacuum"
+        box.color = [0, 0, 1, 1]
+
+        # phantoms
+        m = Rotation.identity().as_matrix()
+
+        phantom_s1 = sim.add_volume("Box", "phantom_s1")
+        phantom_s1.mother = "box"
+        phantom_s1.size = [100 * mm, 100 * mm, 50 * mm]
+        phantom_s1.translation = [-50 * mm, 0 * mm, -500 * mm]
+        phantom_s1.rotation = m
+        phantom_s1.material = "G4_WATER"
+        phantom_s1.color = [1, 0, 1, 1]
+
+        phantom_s2 = sim.add_volume("Box", "phantom_s2")
+        phantom_s2.mother = "box"
+        phantom_s2.size = [100 * mm, 100 * mm, 50 * mm]
+        phantom_s2.translation = [50 * mm, 0 * mm, -500 * mm]
+        phantom_s2.rotation = m
+        phantom_s2.material = "G4_WATER"
+        phantom_s2.color = [1, 0, 1, 1]
+
+        # add dose actor
+        dose_s1 = sim.add_actor("DoseActor", d0name)
+        filename = f"phantom_s1_{label}.mhd"
+        dose_s1.output_filename = filename
+        dose_s1.attached_to = "phantom_s1"
+        dose_s1.size = [25, 25, 1]
+        dose_s1.spacing = [4.0, 4.0, 50.0]
+        dose_s1.hit_type = "random"
+        dose_s1.edep_uncertainty.active = True
+        # dose_s1.ste_of_mean = True
+
+        # add dose actor
+        dose_s2 = sim.add_actor("DoseActor", d1name)
+        filename = f"phantom_s2_{label}.mhd"
+        dose_s2.output_filename = filename
+        dose_s2.attached_to = "phantom_s2"
+        dose_s2.size = [25, 25, 1]
+        dose_s2.spacing = [4.0, 4.0, 50.0]
+        dose_s2.hit_type = "random"
+        dose_s2.edep_uncertainty.active = True
+
+        ## TPS SOURCE ##
+        # beamline model
+        beamline = BeamlineModel()
+        beamline.name = None
+        beamline.radiation_types = "proton"
+
+        # polinomial coefficients
+        beamline.energy_mean_coeffs = [1, 0]
+        beamline.energy_spread_coeffs = [0.4417036946562556]
+        beamline.sigma_x_coeffs = [2.3335754]
+        beamline.theta_x_coeffs = [2.3335754e-3]
+        beamline.epsilon_x_coeffs = [0.00078728e-3]
+        beamline.sigma_y_coeffs = [1.96433431]
+        beamline.theta_y_coeffs = [0.00079118e-3]
+        beamline.epsilon_y_coeffs = [0.00249161e-3]
+
+        # tps
+        print("--- Flat spots distribution ---")
+        tps = sim.add_source("TreatmentPlanPBSource", label)
+        tps.number_of_primaries = nSim
+        tps.end_time = 0.5 * s
+        tps.flat_generation = flat # from function argument
+        tps.beam_model = beamline
+        tps.plan_path = ref_path / "TreatmentPlan2Spots_flat_gen_test.txt"
+        tps.beam_nr = 1
+        tps.gantry_rot_axis = "x"
+        tps.particle = "proton"
+        tps.position.translation = [0 * cm, 0 * cm, 0 * cm]
+
+        # add stat actor
+        self.stats = sim.add_actor("SimulationStatisticsActor", "Stats")
+        self.stats.track_types_flag = True
+
+        # physics
+        sim.physics_manager.physics_list_name = "FTFP_INCLXX_EMZ"
+        sim.physics_manager.set_production_cut("world", "all", 1000 * km)
+        # sim.set_user_limits("phantom_a_2","max_step_size",1,['proton'])
+
+        # create output dir, if it doesn't exist
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # start simulation
+        sim.run(start_new_process=True)
+        print(self.stats)
+
+        # ----------------------------------------------------------------------------------------------------------------
+        # tests
+        self.d_names = [d0name,d1name]
+        self.edep_paths = [output_path / sim.get_actor(d).get_output_path("edep") for d in self.d_names]
+        self.edep_unc_paths = [output_path / sim.get_actor(d).get_output_path("edep_uncertainty") for d in self.d_names]
+
 if __name__ == "__main__":
-    paths = utility.get_default_test_paths(
-        __file__, "gate_test044_pbs", output_folder="test059"
-    )
-    output_path = paths.output
-    ref_path = paths.output_ref
 
-    # create the simulation
-    sim = gate.Simulation()
-
-    # main options
-    sim.g4_verbose = False
-    sim.g4_verbose_level = 1
-    sim.visu = False
-    sim.random_seed = 123654789
-    sim.random_engine = "MersenneTwister"
-    sim.number_of_threads = 1
-    sim.output_dir = output_path
-
-    # units
-    km = gate.g4_units.km
-    cm = gate.g4_units.cm
-    mm = gate.g4_units.mm
-    um = gate.g4_units.um
-    MeV = gate.g4_units.MeV
-    Bq = gate.g4_units.Bq
-    nm = gate.g4_units.nm
-    deg = gate.g4_units.deg
-    mrad = gate.g4_units.mrad
-    s = gate.g4_units.s
-
-    # add a material database
-    sim.volume_manager.add_material_database(paths.data / "GateMaterials.db")
-
-    #  change world size
-    world = sim.world
-    world.size = [600 * cm, 500 * cm, 500 * cm]
-
-    ## FIRST DETECTOR ##
-    # box
-    # translation and rotation like in the Gate macro
-    box1 = sim.add_volume("Box", "box1")
-    box1.size = [200 * mm, 200 * mm, 1050 * mm]
-    # box1.translation = [0 * cm, 0 * cm, 52.5 * cm]
-    # box1.rotation = Rotation.from_euler('y',-90,degrees=True).as_matrix()
-    box1.translation = [0 * cm, 0 * cm, 52.5 * cm]
-    box1.material = "Vacuum"
-    box1.color = [0, 0, 1, 1]
-
-    # phantoms
-    m = Rotation.identity().as_matrix()
-
-    phantom1_s1 = sim.add_volume("Box", "phantom1_s1")
-    phantom1_s1.mother = "box1"
-    phantom1_s1.size = [100 * mm, 100 * mm, 50 * mm]
-    phantom1_s1.translation = [-50 * mm, 0 * mm, -500 * mm]
-    phantom1_s1.rotation = m
-    phantom1_s1.material = "G4_WATER"
-    phantom1_s1.color = [1, 0, 1, 1]
-
-    phantom1_s2 = sim.add_volume("Box", "phantom1_s2")
-    phantom1_s2.mother = "box1"
-    phantom1_s2.size = [100 * mm, 100 * mm, 50 * mm]
-    phantom1_s2.translation = [50 * mm, 0 * mm, -500 * mm]
-    phantom1_s2.rotation = m
-    phantom1_s2.material = "G4_WATER"
-    phantom1_s2.color = [1, 0, 1, 1]
-
-    # add dose actor
-    dose1_s1 = sim.add_actor("DoseActor", "edep_11")
-    filename = "phantom1_s1.mhd"
-    dose1_s1.output_filename = filename
-    dose1_s1.attached_to = "phantom1_s1"
-    dose1_s1.size = [25, 25, 1]
-    dose1_s1.spacing = [4.0, 4.0, 50.0]
-    dose1_s1.hit_type = "random"
-    dose1_s1.edep_uncertainty.active = True
-    # dose1_s1.ste_of_mean = True
-
-    # add dose actor
-    dose1_s2 = sim.add_actor("DoseActor", "edep_12")
-    filename = "phantom1_s2.mhd"
-    dose1_s2.output_filename = filename
-    dose1_s2.attached_to = "phantom1_s2"
-    dose1_s2.size = [25, 25, 1]
-    dose1_s2.spacing = [4.0, 4.0, 50.0]
-    dose1_s2.hit_type = "random"
-    dose1_s2.edep_uncertainty.active = True
-    # # PhaseSpace Actor
-    # Phsp_act = sim.add_actor("PhaseSpaceActor", "PhaseSpace")
-    # Phsp_act.attached_to = phantom1_s2.name
-    # Phsp_act.attributes = [
-    #     "KineticEnergy",
-    #     "EventID",
-    #     "ThreadID",
-    # ]
-    # Phsp_act.output = output_path / "test058_MT.root"
-    # Phsp_act.debug = False
-
-    ## SECOND DETECTOR ##
-    # box
-    # translation and rotation like in the Gate macro
-    box2 = sim.add_volume("Box", "box2")
-    box2.size = [200 * mm, 200 * mm, 1050 * mm]
-    # box2.rotation = Rotation.from_euler('y',90,degrees=True).as_matrix()
-    box2.translation = [40 * cm, 0 * cm, 52.5 * cm]
-    # box2.translation = [-52.5* cm, 0 * cm, 40 * cm]
-    box2.material = "Vacuum"
-    box2.color = [0, 0, 1, 1]
-
-    # phantoms
-    m = Rotation.identity().as_matrix()
-
-    phantom2_s1 = sim.add_volume("Box", "phantom2_s1")
-    phantom2_s1.mother = "box2"
-    phantom2_s1.size = [100 * mm, 100 * mm, 50 * mm]
-    phantom2_s1.translation = [-50 * mm, 0 * mm, -500 * mm]
-    phantom2_s1.rotation = m
-    phantom2_s1.material = "G4_WATER"
-    phantom2_s1.color = [1, 0, 1, 1]
-
-    phantom2_s2 = sim.add_volume("Box", "phantom2_s2")
-    phantom2_s2.mother = "box2"
-    phantom2_s2.size = [100 * mm, 100 * mm, 50 * mm]
-    phantom2_s2.translation = [50 * mm, 0 * mm, -500 * mm]
-    phantom2_s2.rotation = m
-    phantom2_s2.material = "G4_WATER"
-    phantom2_s2.color = [1, 0, 1, 1]
-
-    # add dose actor
-    dose2_s1 = sim.add_actor("DoseActor", "edep_21")
-    filename = "phantom2_s1.mhd"
-    dose2_s1.output_filename = filename
-    dose2_s1.attached_to = "phantom2_s1"
-    dose2_s1.size = [25, 25, 1]
-    dose2_s1.spacing = [4.0, 4.0, 50.0]
-    dose2_s1.hit_type = "random"
-    dose2_s1.edep_uncertainty.active = True
-
-    dose2_s2 = sim.add_actor("DoseActor", "edep_22")
-    filename = "phantom2_s2.mhd"
-    dose2_s2.output_filename = filename
-    dose2_s2.attached_to = "phantom2_s2"
-    dose2_s2.size = [25, 25, 1]
-    dose2_s2.spacing = [4.0, 4.0, 50.0]
-    dose2_s2.hit_type = "random"
-    dose2_s2.edep_uncertainty.active = True
-
-    ## TPS SOURCE ##
-    # beamline model
-    beamline = BeamlineModel()
-    beamline.name = None
-    beamline.radiation_types = "proton"
-
-    # polinomial coefficients
-    beamline.energy_mean_coeffs = [1, 0]
-    beamline.energy_spread_coeffs = [0.4417036946562556]
-    beamline.sigma_x_coeffs = [2.3335754]
-    beamline.theta_x_coeffs = [2.3335754e-3]
-    beamline.epsilon_x_coeffs = [0.00078728e-3]
-    beamline.sigma_y_coeffs = [1.96433431]
-    beamline.theta_y_coeffs = [0.00079118e-3]
-    beamline.epsilon_y_coeffs = [0.00249161e-3]
-
-    # tps
-    nSim = 40000  # particles to simulate per beam
-    print("--- Flat spots distribution ---")
-    tps_flat = sim.add_source("TreatmentPlanPBSource", "flat")
-    tps_flat.number_of_primaries = nSim
-    tps_flat.end_time = 0.5 * s
-    tps_flat.flat_generation = True
-    tps_flat.beam_model = beamline
-    tps_flat.plan_path = ref_path / "TreatmentPlan2Spots_flat_gen_test.txt"
-    tps_flat.beam_nr = 1
-    tps_flat.gantry_rot_axis = "x"
-    tps_flat.particle = "proton"
-    tps_flat.position.translation = [0 * cm, 0 * cm, -30 * cm]
-
-    print("--- Proportional spots distribution ---")
-    tps_non_flat = sim.add_source("TreatmentPlanPBSource", "proportional")
-    tps_non_flat.number_of_primaries = nSim
-    tps_non_flat.start_time = 0.5 * s
-    tps_non_flat.flat_generation = False
-    tps_non_flat.beam_model = beamline
-    tps_non_flat.plan_path = ref_path / "TreatmentPlan2Spots_flat_gen_test.txt"
-    tps_non_flat.beam_nr = 1
-    tps_non_flat.gantry_rot_axis = "x"
-    tps_non_flat.particle = "proton"
-    tps_non_flat.position.translation = [40 * cm, 0 * cm, 0 * cm]
-
-    # add stat actor
-    stats = sim.add_actor("SimulationStatisticsActor", "Stats")
-    stats.track_types_flag = True
-
-    # physics
-    sim.physics_manager.physics_list_name = "FTFP_INCLXX_EMZ"
-    sim.physics_manager.set_production_cut("world", "all", 1000 * km)
-    # sim.set_user_limits("phantom_a_2","max_step_size",1,['proton'])
-
-    # create output dir, if it doesn't exist
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    # start simulation
-    sim.run()
-
-    # print results at the end
-    print(stats)
-
-    # ----------------------------------------------------------------------------------------------------------------
-    # tests
-    # with and without flat generation, the result in terms of dose should be identical
-    d_names = ["edep_11", "edep_12", "edep_21", "edep_22"]
-    dose_actors = [sim.get_actor(d) for d in d_names]
+    flatsim = sim_tps_dose(flat=True)
+    wsim = sim_tps_dose(flat=False)
     test = True
 
-    # check that the dose output is the same
-    print("--- Dose image spot 0 ---")
-    test = (
-        utility.assert_images(
-            output_path / dose_actors[0].get_output_path("edep"),
-            output_path / dose_actors[2].get_output_path("edep"),
-            stats,
-            tolerance=70,
-            ignore_value_data2=0,
-        )
-        and test
-    )
+    # with and without flat generation, the result in terms of dose should be identical
 
-    print("--- Dose image spot 1 ---")
-    test = (
-        utility.assert_images(
-            output_path / dose_actors[1].get_output_path("edep"),
-            output_path / dose_actors[3].get_output_path("edep"),
-            stats,
-            tolerance=70,
-            ignore_value_data2=0,
-            sum_tolerance=5.2,
+    # check that the dose output is the same
+    for spot in [0,1]:
+        print(f"--- Dose image spot {spot} ---")
+        test = (
+            utility.assert_images(
+                flatsim.edep_paths[spot],
+                wsim.edep_paths[spot],
+                flatsim.stats,
+                tolerance=70,
+                ignore_value_data2=0,
+            )
+            and test
         )
-        and test
-    )
 
     # check that output with flat distribution has better statistics for the spot with less particles
     unc_vec = []
-    for d, name in zip(dose_actors, d_names):
-        edep_img = itk.imread(paths.output / d.get_output_path("edep"))
+    all_edep_paths = flatsim.edep_paths + wsim.edep_paths
+    all_edep_unc_paths = flatsim.edep_unc_paths + wsim.edep_unc_paths
+    all_names = flatsim.d_names + wsim.d_names
+    for d, du, name in zip(all_edep_paths, all_edep_unc_paths, all_names):
+        edep_img = itk.imread(d)
         edep_arr = itk.GetArrayViewFromImage(edep_img)
-        unc_img = itk.imread(paths.output / d.get_output_path("edep_uncertainty"))
+        unc_img = itk.imread(du)
         unc_arr = itk.GetArrayFromImage(unc_img)
         # fig = utility.plot2D(unc_arr[0,:,:], d_actor, show=True)
         mean_unc = calculate_mean_unc(edep_arr, unc_arr, edep_thresh_rel=0.2)
