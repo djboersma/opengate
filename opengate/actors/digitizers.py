@@ -278,21 +278,14 @@ class DigitizerBase(ActorBase):
     def initialize(self):
         ActorBase.initialize(self)
 
-    def end_simulation_action(self):
-        """Finalize digitizer outputs on the Python side.
-
-        This lower-case helper contains the reusable Python-side end-of-
-        simulation logic. Concrete ``EndSimulationAction()`` trampoline methods
-        should call their actor-specific C++ ``EndSimulationAction()`` first and
-        then forward here, either directly or via this base implementation.
-        """
-        for user_output in self.user_output.values():
-            user_output.end_of_simulation()
+    def finalize_simulation(self):
+        """Finalize digitizer outputs on the Python side."""
+        super().finalize_simulation()
 
     def EndSimulationAction(self):
         # Keep this trampoline thin: do not put functional Python logic here.
-        # Concrete Python-side finalization belongs in end_simulation_action().
-        self.end_simulation_action()
+        # Concrete Python-side finalization belongs in finalize_simulation().
+        pass
 
 
 class DigitizerWithRootOutput(DigitizerBase):
@@ -627,6 +620,18 @@ class DigitizerDeadTimeActor(DigitizerWithRootOutput, g4.GateDigitizerDeadTimeAc
                 "doc": "Time interval during which digis are buffered for time-sorting",
             },
         ),
+        "thread_sync_enabled": (
+            True,
+            {
+                "doc": "Thread synchronization is applied to limit sorting buffer size",
+            },
+        ),
+        "sorting_buffer_size": (
+            5e4,
+            {
+                "doc": "Sorting buffer size (digis) at which thread synchronization is applied",
+            },
+        ),
         "skip_attributes": (
             [],
             {
@@ -747,6 +752,18 @@ class DigitizerPileupActor(DigitizerWithRootOutput, g4.GateDigitizerPileupActor)
             1e3,
             {
                 "doc": "Time interval during which digis are buffered for time-sorting",
+            },
+        ),
+        "thread_sync_enabled": (
+            True,
+            {
+                "doc": "Thread synchronization is applied to limit sorting buffer size",
+            },
+        ),
+        "sorting_buffer_size": (
+            5e4,
+            {
+                "doc": "Sorting buffer size (digis) at which thread synchronization is applied",
             },
         ),
         "skip_attributes": (
@@ -1341,12 +1358,10 @@ class DigitizerProjectionActor(DigitizerBase, g4.GateDigitizerProjectionActor):
 
     def EndSimulationAction(self):
         # Keep this trampoline thin: do not put functional Python logic here.
-        # Concrete Python-side finalization belongs in end_simulation_action().
+        # Concrete Python-side finalization belongs in finalize_simulation().
         g4.GateDigitizerProjectionActor.EndSimulationAction(self)
 
-        self.end_simulation_action()
-
-    def end_simulation_action(self):
+    def finalize_simulation(self):
         """Transfer the projection image from C++ to Python and finalize outputs."""
 
         # retrieve the image
@@ -1392,7 +1407,7 @@ class DigitizerProjectionActor(DigitizerBase, g4.GateDigitizerProjectionActor):
             self.user_output.squared_counts.data_per_run.pop(0)
             self.user_output.squared_counts.write_data_if_requested(which="merged")
 
-        DigitizerBase.end_simulation_action(self)
+        DigitizerBase.finalize_simulation(self)
 
 
 class CoincidenceSorterActor(DigitizerWithRootOutput, g4.GateCoincidenceSorterActor):
@@ -1474,6 +1489,18 @@ class CoincidenceSorterActor(DigitizerWithRootOutput, g4.GateCoincidenceSorterAc
             1e3,
             {
                 "doc": "Time interval during which digis are buffered for time-sorting",
+            },
+        ),
+        "thread_sync_enabled": (
+            True,
+            {
+                "doc": "Thread synchronization is applied to limit sorting buffer size",
+            },
+        ),
+        "sorting_buffer_size": (
+            5e4,
+            {
+                "doc": "Sorting buffer size (digis) at which thread synchronization is applied",
             },
         ),
         "skip_attributes": (
@@ -1662,11 +1689,11 @@ class PhaseSpaceActor(DigitizerWithRootOutput, g4.GatePhaseSpaceActor):
 
     def EndSimulationAction(self):
         # Keep this trampoline thin: do not put functional Python logic here.
-        # Concrete Python-side finalization belongs in end_simulation_action().
+        # Concrete Python-side finalization belongs in finalize_simulation().
         g4.GatePhaseSpaceActor.EndSimulationAction(self)
         DigitizerBase.EndSimulationAction(self)
 
-    def end_simulation_action(self):
+    def finalize_simulation(self):
         """Capture phase-space summary counters and finalize ROOT output."""
         self.number_of_absorbed_events = self.GetNumberOfAbsorbedEvents()
         self.total_number_of_entries = self.GetTotalNumberOfEntries()
@@ -1674,7 +1701,7 @@ class PhaseSpaceActor(DigitizerWithRootOutput, g4.GatePhaseSpaceActor):
             self.warn_user(
                 f"Empty output, no particles stored in {self.get_output_path()}"
             )
-        DigitizerBase.end_simulation_action(self)
+        DigitizerBase.finalize_simulation(self)
 
 
 class DigiAttributeProcessDefinedStepInVolumeActor(
