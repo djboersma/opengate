@@ -9,12 +9,7 @@ from opengate.tests import utility
 from opengate.contrib.beamlines.ionbeamline import BeamlineModel
 from opengate.contrib.tps.ionbeamtherapy import spots_info_from_txt
 
-if __name__ == "__main__":
-    paths = utility.get_default_test_paths(
-        __file__, "gate_test044_pbs", output_folder="test059"
-    )
-    output_path = paths.output
-    ref_path = paths.output_ref
+def run_simulation(paths):
 
     # create the simulation
     sim = gate.Simulation()
@@ -25,7 +20,7 @@ if __name__ == "__main__":
     sim.visu = False
     sim.random_seed = 12365478910
     sim.random_engine = "MersenneTwister"
-    sim.output_dir = output_path
+    sim.output_dir = paths.output
 
     # units
     km = gate.g4_units.km
@@ -115,7 +110,7 @@ if __name__ == "__main__":
     # NOTE: HBL means that the beam is coming from -x (90 degree rot around y)
     nSim = 50000  # 328935  # particles to simulate per beam
     beam_data_dict = spots_info_from_txt(
-        ref_path / "TreatmentPlan4Gate-F5x5cm_E120MeVn.txt", "ion 6 12", beam_nr=1
+        paths.output_ref / "TreatmentPlan4Gate-F5x5cm_E120MeVn.txt", "ion 6 12", beam_nr=1
     )
     tps = sim.add_source("TreatmentPlanPBSource", "TPSource")
     tps.number_of_primaries = nSim
@@ -130,7 +125,7 @@ if __name__ == "__main__":
     stats = sim.add_actor("SimulationStatisticsActor", "Stats")
 
     # create output dir, if it doesn't exist
-    output_path.mkdir(parents=True, exist_ok=True)
+    paths.output.mkdir(parents=True, exist_ok=True)
 
     # start simulation
     sim.run()
@@ -138,18 +133,21 @@ if __name__ == "__main__":
     # -------------END SCANNING------------- #
     # print results at the end
     print(stats)
-
     # ------ TESTS -------#
     dose_path = utility.scale_dose(
         str(dose.get_output_path("dose")),
         ntot / nSim,
-        output_path / "abs_dose_roos-Scaled.mhd",
+        paths.output / "abs_dose_roos-Scaled.mhd",
     )
+    return dose_path
+
+
+def run_tests(paths, dose_path):
 
     # ABSOLUTE DOSE
 
     # read output and ref
-    f = ref_path / "idc-PHANTOM-roos-F5x5cm_E120MeVn-PLAN-Physical.mhd"
+    f = paths.output_ref / "idc-PHANTOM-roos-F5x5cm_E120MeVn-PLAN-Physical.mhd"
     print("Compare", dose_path, f)
     img_mhd_out = itk.imread(dose_path)
     img_mhd_ref = itk.imread(f)
@@ -184,6 +182,13 @@ if __name__ == "__main__":
     plot_img_axis(ax, img_mhd_out, "x profile", axis="z")
     plot_img_axis(ax, img_mhd_ref, "x ref", axis="z")
     plt.show()
-    fig.savefig(output_path / "dose_profiles_water.png")"""
+    fig.savefig(paths.output / "dose_profiles_water.png")"""
 
     utility.test_ok(ok)
+
+if __name__ == "__main__":
+    paths = utility.get_default_test_paths(
+        __file__, "gate_test044_pbs", output_folder="test059"
+    )
+    dose_path = run_simulation(paths)
+    run_tests(paths, dose_path)
